@@ -197,7 +197,7 @@ def reset_ui():
 # ---------------- UI Layout ----------------
 
 root = tk.Tk()
-root.title("Spotify Downloader")
+root.title("Emerson, Lake & Download")
 root.geometry("720x500")
 root.resizable(False, False)
 root.protocol("WM_DELETE_WINDOW", on_close)
