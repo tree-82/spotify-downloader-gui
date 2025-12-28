@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import subprocess
@@ -17,6 +18,12 @@ last_line_was_successful_download = False
 output_queue = queue.Queue()
 
 # ---------------- Utilities ----------------
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 def kill_process_tree(proc):
     if proc and proc.poll() is None:
@@ -142,12 +149,21 @@ def run_spotdl(link, folder):
     global process, download_active
 
     try:
+        spotdl_path = resource_path("spotdl.exe")
+
+        if not os.path.exists(spotdl_path):
+            raise FileNotFoundError("spotdl.exe not found")
+
         process = subprocess.Popen(
-            ["spotdl", link, "--output", folder],
+            [
+                spotdl_path,
+                link,
+                "--output",
+                folder
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
         )
 
@@ -166,15 +182,18 @@ def run_spotdl(link, folder):
             0,
             lambda: messagebox.showerror(
                 "Error",
-                "spotdl not found in PATH.\nActivate the correct environment."
+                "Internal error: spotdl.exe missing."
             )
         )
+
     except Exception as e:
         root.after(0, lambda: messagebox.showerror("Error", str(e)))
 
     finally:
         download_active = False
         root.after(0, reset_ui)
+
+
 
 def poll_output():
     while not output_queue.empty():
