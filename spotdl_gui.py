@@ -7,6 +7,9 @@ import queue
 import os
 import re
 import signal
+from pathlib import Path
+from dotenv import load_dotenv
+from datetime import datetime
 
 # ---------------- Global State ----------------
 
@@ -17,7 +20,28 @@ last_line_was_successful_download = False
 
 output_queue = queue.Queue()
 
+load_dotenv()
+CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+if not CLIENT_ID or not CLIENT_SECRET:
+    messagebox.showerror("Missing Credentials",
+                         "CLIENT_ID or CLIENT_SECRET missing in .env")
+
+# ---------------- Logging ----------------
+
+LOG_DIR = "logs"
+
+def init_log():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return open(
+        os.path.join(LOG_DIR, f"download_{timestamp}.log"),
+        "w",
+        encoding="utf-8"
+    )
+
 # ---------------- Utilities ----------------
+
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -38,6 +62,7 @@ def reset_cancel_counter():
     cancel_press_count = 0
 
 # ---------------- UI Helpers ----------------
+
 def append_output(text):
     global last_line_was_successful_download
 
@@ -55,7 +80,6 @@ def append_output(text):
         if last_line_was_successful_download:
             last_line_was_successful_download = False
             return
-        
 
     last_line_was_successful_download = False
 
@@ -145,18 +169,49 @@ def start_download():
 
     root.after(200, poll_output)
 
+def ensure_spotdl_config():
+    config_dir = Path.home() / ".spotdl"
+    config_dir.mkdir(exist_ok=True)
+
+    config_file = config_dir / "config.json"
+
+    if config_file.exists():
+        return  
+
+    config_content = f'''
+    {{
+        "spotifyClientId": "{CLIENT_ID}",
+        "spotifyClientSecret": "{CLIENT_SECRET}",
+        "loadConfig": true,
+        "saveFile": "config.json"
+    }}
+    '''
+
+    with open(config_file, "w", encoding="utf-8") as f:
+        f.write(config_content)
+
+
 def run_spotdl(link, folder):
     global process, download_active
 
+    log_file = None
+
     try:
+        log_file = init_log()
+        log_file.write(f"Spotify link: {link}\n")
+        log_file.write(f"Output folder: {folder}\n\n")
+
         spotdl_path = resource_path("spotdl.exe")
+        ensure_spotdl_config()
 
         if not os.path.exists(spotdl_path):
             raise FileNotFoundError("spotdl.exe not found")
 
         process = subprocess.Popen(
-            [
+        [
                 spotdl_path,
+                "--config",
+                "--no-cache",
                 link,
                 "--output",
                 folder
@@ -167,17 +222,23 @@ def run_spotdl(link, folder):
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
         )
 
+
         for line in process.stdout:
+            log_file.write(line)
+            log_file.flush()
             output_queue.put(line)
 
         exit_code = process.wait()
+        log_file.write(f"\nProcess exited with code: {exit_code}\n")
 
         if exit_code == 0:
             root.after(0, download_finished)
         else:
             root.after(0, lambda: status_label.config(text="Download failed."))
 
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        if log_file:
+            log_file.write(f"\nERROR: {e}\n")
         root.after(
             0,
             lambda: messagebox.showerror(
@@ -187,13 +248,15 @@ def run_spotdl(link, folder):
         )
 
     except Exception as e:
+        if log_file:
+            log_file.write(f"\nUNEXPECTED ERROR:\n{e}\n")
         root.after(0, lambda: messagebox.showerror("Error", str(e)))
 
     finally:
         download_active = False
+        if log_file:
+            log_file.close()
         root.after(0, reset_ui)
-
-
 
 def poll_output():
     while not output_queue.empty():
@@ -263,6 +326,5 @@ output_text = tk.Text(
 output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 scrollbar.config(command=output_text.yview)
-
 
 root.mainloop()
