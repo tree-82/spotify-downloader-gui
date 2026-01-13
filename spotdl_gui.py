@@ -1,4 +1,5 @@
 import sys
+import json
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import subprocess
@@ -21,11 +22,6 @@ last_line_was_successful_download = False
 output_queue = queue.Queue()
 
 load_dotenv()
-CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-if not CLIENT_ID or not CLIENT_SECRET:
-    messagebox.showerror("Missing Credentials",
-                         "CLIENT_ID or CLIENT_SECRET missing in .env")
 
 # ---------------- Logging ----------------
 
@@ -169,27 +165,29 @@ def start_download():
 
     root.after(200, poll_output)
 
-def ensure_spotdl_config():
-    config_dir = Path.home() / ".spotdl"
-    config_dir.mkdir(exist_ok=True)
+def ensure_spotdl_config(log_file):
+    home = os.path.expanduser("~")
+    config_dir = os.path.join(home, ".spotdl")
+    os.makedirs(config_dir, exist_ok=True)
 
-    config_file = config_dir / "config.json"
+    config_path = os.path.join(config_dir, "config.json")
 
-    if config_file.exists():
-        return  
+    client_id = os.getenv("CLIENT_ID")
+    client_secret = os.getenv("CLIENT_SECRET")
 
-    config_content = f'''
-    {{
-        "spotifyClientId": "{CLIENT_ID}",
-        "spotifyClientSecret": "{CLIENT_SECRET}",
-        "loadConfig": true,
-        "saveFile": "config.json"
-    }}
-    '''
+    if not client_id or not client_secret:
+        raise Exception("CLIENT_ID or CLIENT_SECRET missing in .env")
 
-    with open(config_file, "w", encoding="utf-8") as f:
-        f.write(config_content)
+    config = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "no_cache": True
+    }
 
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
+
+    log_file.write(f"Config written: {config_path}\n")
 
 def run_spotdl(link, folder):
     global process, download_active
@@ -201,27 +199,47 @@ def run_spotdl(link, folder):
         log_file.write(f"Spotify link: {link}\n")
         log_file.write(f"Output folder: {folder}\n\n")
 
-        spotdl_path = resource_path("spotdl.exe")
-        ensure_spotdl_config()
+        # ---- ensure config exists ----
+        ensure_spotdl_config(log_file)
 
-        if not os.path.exists(spotdl_path):
-            raise FileNotFoundError("spotdl.exe not found")
+        # ---- Decide how to run SpotDL ----
+        running_as_exe = hasattr(sys, "_MEIPASS")
 
-        process = subprocess.Popen(
-        [
+        if running_as_exe:
+            spotdl_path = resource_path("spotdl.exe")
+            if not os.path.exists(spotdl_path):
+                raise FileNotFoundError("Bundled spotdl.exe not found")
+
+            cmd = [
                 spotdl_path,
                 "--config",
                 "--no-cache",
                 link,
                 "--output",
                 folder
-            ],
+            ]
+
+        else:
+            cmd = [
+                sys.executable,
+                "-m",
+                "spotdl",
+                "--config",
+                "--no-cache",
+                link,
+                "--output",
+                folder
+            ]
+
+        log_file.write("Executing:\n" + " ".join(cmd) + "\n\n")
+
+        process = subprocess.Popen(
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
         )
-
 
         for line in process.stdout:
             log_file.write(line)
@@ -236,27 +254,21 @@ def run_spotdl(link, folder):
         else:
             root.after(0, lambda: status_label.config(text="Download failed."))
 
-    except FileNotFoundError as e:
-        if log_file:
-            log_file.write(f"\nERROR: {e}\n")
-        root.after(
-            0,
-            lambda: messagebox.showerror(
-                "Error",
-                "Internal error: spotdl.exe missing."
-            )
-        )
-
     except Exception as e:
+        error_msg = str(e)
+
         if log_file:
-            log_file.write(f"\nUNEXPECTED ERROR:\n{e}\n")
-        root.after(0, lambda: messagebox.showerror("Error", str(e)))
+            log_file.write(f"\nERROR:\n{error_msg}\n")
+
+        root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
+
 
     finally:
         download_active = False
         if log_file:
             log_file.close()
         root.after(0, reset_ui)
+
 
 def poll_output():
     while not output_queue.empty():
